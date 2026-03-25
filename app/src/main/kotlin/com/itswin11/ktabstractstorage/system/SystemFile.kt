@@ -4,6 +4,7 @@ import com.itswin11.ktabstractstorage.ChildFile
 import com.itswin11.ktabstractstorage.File
 import com.itswin11.ktabstractstorage.Folder
 import com.itswin11.ktabstractstorage.enums.FileAccessMode
+import com.itswin11.ktabstractstorage.extensions.interfaces.GetRoot
 import com.itswin11.ktabstractstorage.streams.FileStream
 import com.itswin11.ktabstractstorage.streams.UnifiedStream
 import kotlinx.coroutines.Dispatchers
@@ -20,7 +21,7 @@ import java.nio.file.Path
 class SystemFile(
     internal val path: Path,
     private val skipValidation: Boolean = false,
-) : ChildFile {
+) : GetRoot, ChildFile {
     init {
         if (!skipValidation) {
             require(Files.exists(path)) {
@@ -38,11 +39,14 @@ class SystemFile(
 
     override val name: String = normalizedPath.fileName?.toString() ?: normalizedPath.toString()
 
-    override suspend fun getParentAsync(): Folder?
-        = normalizedPath.parent?.let(::SystemFolder)
+    override suspend fun getParentAsync(): Folder? = normalizedPath.parent?.let(::SystemFolder)
 
-    override suspend fun openStreamAsync(accessMode: FileAccessMode): UnifiedStream
-        = FileStream(normalizedPath.toFile(), accessMode)
+    override suspend fun openStreamAsync(accessMode: FileAccessMode): UnifiedStream =
+        withContext(Dispatchers.IO) { FileStream(path.toFile(), accessMode) }
+
+    override suspend fun getRootAsync(): Folder? =
+        normalizedPath.root?.let(::SystemFolder)
+
 
     internal companion object {
         fun createUnvalidated(path: Path) = SystemFile(path, skipValidation = true)

@@ -2,10 +2,21 @@ package com.itswin11.ktabstractstorage.system
 
 import com.itswin11.ktabstractstorage.ChildFile
 import com.itswin11.ktabstractstorage.ChildFolder
+import com.itswin11.ktabstractstorage.File
 import com.itswin11.ktabstractstorage.Folder
 import com.itswin11.ktabstractstorage.ModifiableFolder
 import com.itswin11.ktabstractstorage.StorableChild
 import com.itswin11.ktabstractstorage.enums.StorableType
+import com.itswin11.ktabstractstorage.extensions.interfaces.CreateCopyOfDelegate
+import com.itswin11.ktabstractstorage.extensions.interfaces.CreateRenamedCopyOf
+import com.itswin11.ktabstractstorage.extensions.interfaces.CreateRenamedCopyOfDelegate
+import com.itswin11.ktabstractstorage.extensions.interfaces.GetFirstByName
+import com.itswin11.ktabstractstorage.extensions.interfaces.GetItem
+import com.itswin11.ktabstractstorage.extensions.interfaces.GetItemRecursive
+import com.itswin11.ktabstractstorage.extensions.interfaces.GetRoot
+import com.itswin11.ktabstractstorage.extensions.interfaces.MoveFromDelegate
+import com.itswin11.ktabstractstorage.extensions.interfaces.MoveRenamedFrom
+import com.itswin11.ktabstractstorage.extensions.interfaces.MoveRenamedFromDelegate
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -13,7 +24,9 @@ import kotlinx.coroutines.withContext
 import java.io.FileNotFoundException
 import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Files
+import java.nio.file.InvalidPathException
 import java.nio.file.Path
+import java.nio.file.StandardCopyOption.REPLACE_EXISTING
 import java.nio.file.StandardOpenOption.CREATE
 import java.nio.file.StandardOpenOption.TRUNCATE_EXISTING
 import java.util.Comparator
@@ -27,7 +40,14 @@ import java.util.Comparator
 class SystemFolder(
     internal val path: Path,
     private val skipValidation: Boolean = false,
-) : ModifiableFolder, ChildFolder {
+) : CreateRenamedCopyOf,
+    MoveRenamedFrom,
+    GetRoot,
+    GetItem,
+    GetItemRecursive,
+    GetFirstByName,
+    ModifiableFolder,
+    ChildFolder {
     init {
         if (!skipValidation) {
             require(Files.exists(path)) {
@@ -53,7 +73,6 @@ class SystemFolder(
         }
 
         val items: List<StorableChild> = withContext(Dispatchers.IO) {
-            Files.createDirectories(normalizedPath)
             Files.list(normalizedPath).use { children ->
                 val collected = mutableListOf<StorableChild>()
                 children.forEach { childPath ->
@@ -79,8 +98,35 @@ class SystemFolder(
         }
     }
 
+    override suspend fun getItemAsync(id: String): StorableChild = withContext(Dispatchers.IO) {
+        val target = pathFromIdOrNull(id)
+            ?.takeIf { it.parent == normalizedPath }
+            ?: throw FileNotFoundException("No storage item with the id '$id' could be found.")
+
+        childForPath(target)
+            ?: throw FileNotFoundException("No storage item with the id '$id' could be found.")
+    }
+
+    override suspend fun getItemRecursiveAsync(id: String): StorableChild = withContext(Dispatchers.IO) {
+        val target = pathFromIdOrNull(id)
+            ?.takeIf { it.startsWith(normalizedPath) }
+            ?: throw FileNotFoundException("No storage item with the id '$id' could be found.")
+
+        childForPath(target)
+            ?: throw FileNotFoundException("No storage item with the id '$id' could be found.")
+    }
+
+    override suspend fun getFirstByNameAsync(name: String): StorableChild = withContext(Dispatchers.IO) {
+        val target = normalizedPath.resolve(name).normalize()
+        if (target.parent != normalizedPath) {
+            throw FileNotFoundException("No storage item with the name '$name' could be found.")
+        }
+
+        childForPath(target)
+            ?: throw FileNotFoundException("No storage item with the name '$name' could be found.")
+    }
+
     override suspend fun getFolderWatcherAsync(): SystemFolderWatcher = withContext(Dispatchers.IO) {
-        Files.createDirectories(normalizedPath)
         SystemFolderWatcher(this@SystemFolder)
     }
 
@@ -94,12 +140,11 @@ class SystemFolder(
 
     override suspend fun createFolderAsync(name: String, overwrite: Boolean): ChildFolder =
         withContext(Dispatchers.IO) {
-            Files.createDirectories(normalizedPath)
             val target = normalizedPath.resolve(name)
 
             when {
                 Files.notExists(target) -> Files.createDirectory(target)
-                Files.isDirectory(target) -> return@withContext SystemFolder(target)
+                Files.isDirectory(target) -> return@withContext createUnvalidated(target)
                 !overwrite -> throw FileAlreadyExistsException(target.toString())
                 else -> {
                     deleteRecursively(target)
@@ -107,12 +152,11 @@ class SystemFolder(
                 }
             }
 
-            SystemFolder(target)
+            createUnvalidated(target)
         }
 
     override suspend fun createFileAsync(name: String, overwrite: Boolean): ChildFile =
         withContext(Dispatchers.IO) {
-            Files.createDirectories(normalizedPath)
             val target = normalizedPath.resolve(name)
 
             when {
@@ -121,7 +165,7 @@ class SystemFolder(
                     if (overwrite) {
                         Files.newOutputStream(target, CREATE, TRUNCATE_EXISTING).use { }
                     }
-                    return@withContext SystemFile(target)
+                    return@withContext SystemFile.createUnvalidated(target)
                 }
                 !overwrite -> throw FileAlreadyExistsException(target.toString())
                 else -> {
@@ -130,13 +174,109 @@ class SystemFolder(
                 }
             }
 
-            SystemFile(target)
+            SystemFile.createUnvalidated(target)
         }
 
+    override suspend fun moveFromAsync(
+        fileToMove: ChildFile,
+        source: ModifiableFolder,
+        overwrite: Boolean,
+        fallback: MoveFromDelegate,
+    ): ChildFile = withContext(Dispatchers.IO) {
+        if (fileToMove is SystemFile) {
+            return@withContext moveSystemFile(fileToMove.path, overwrite, fileToMove.name)
+        }
+
+        fallback(this@SystemFolder, fileToMove, source, overwrite)
+    }
+
+    override suspend fun moveFromAsync(
+        fileToMove: ChildFile,
+        source: ModifiableFolder,
+        overwrite: Boolean,
+        newName: String,
+        fallback: MoveRenamedFromDelegate,
+    ): ChildFile = withContext(Dispatchers.IO) {
+        if (fileToMove is SystemFile) {
+            return@withContext moveSystemFile(fileToMove.path, overwrite, newName)
+        }
+
+        fallback(this@SystemFolder, fileToMove, source, overwrite, newName)
+    }
+
+    override suspend fun createCopyOfAsync(
+        fileToCopy: File,
+        overwrite: Boolean,
+        fallback: CreateCopyOfDelegate,
+    ): ChildFile = withContext(Dispatchers.IO) {
+        if (fileToCopy is SystemFile) {
+            return@withContext copySystemFile(fileToCopy.path, overwrite, fileToCopy.name)
+        }
+
+        fallback(this@SystemFolder, fileToCopy, overwrite)
+    }
+
+    override suspend fun createCopyOfAsync(
+        fileToCopy: File,
+        overwrite: Boolean,
+        newName: String,
+        fallback: CreateRenamedCopyOfDelegate,
+    ): ChildFile = withContext(Dispatchers.IO) {
+        if (fileToCopy is SystemFile) {
+            return@withContext copySystemFile(fileToCopy.path, overwrite, newName)
+        }
+
+        fallback(this@SystemFolder, fileToCopy, overwrite, newName)
+    }
+
+    override suspend fun getRootAsync(): Folder? =
+        normalizedPath.root?.let(::SystemFolder)
+
+
     private fun childForPath(path: Path): StorableChild? = when {
-        Files.isDirectory(path) -> SystemFolder.createUnvalidated(path)
+        Files.isDirectory(path) -> createUnvalidated(path)
         Files.isRegularFile(path) -> SystemFile.createUnvalidated(path)
         else -> null
+    }
+
+    private fun pathFromIdOrNull(id: String): Path? = try {
+        Path.of(id).toAbsolutePath().normalize()
+    } catch (_: InvalidPathException) {
+        null
+    }
+
+    private fun moveSystemFile(sourcePath: Path, overwrite: Boolean, newName: String): ChildFile {
+        val destinationPath = normalizedPath.resolve(newName)
+
+        when {
+            Files.notExists(destinationPath) -> Files.move(sourcePath, destinationPath)
+            Files.isRegularFile(destinationPath) && overwrite -> Files.move(sourcePath, destinationPath, REPLACE_EXISTING)
+            Files.isRegularFile(destinationPath) -> return SystemFile.createUnvalidated(destinationPath)
+            !overwrite -> throw FileAlreadyExistsException(destinationPath.toString())
+            else -> {
+                deleteRecursively(destinationPath)
+                Files.move(sourcePath, destinationPath)
+            }
+        }
+
+        return SystemFile.createUnvalidated(destinationPath)
+    }
+
+    private fun copySystemFile(sourcePath: Path, overwrite: Boolean, newName: String): ChildFile {
+        val destinationPath = normalizedPath.resolve(newName)
+
+        when {
+            Files.notExists(destinationPath) -> Files.copy(sourcePath, destinationPath)
+            Files.isRegularFile(destinationPath) && overwrite -> Files.copy(sourcePath, destinationPath, REPLACE_EXISTING)
+            Files.isRegularFile(destinationPath) -> return SystemFile.createUnvalidated(destinationPath)
+            !overwrite -> throw FileAlreadyExistsException(destinationPath.toString())
+            else -> {
+                deleteRecursively(destinationPath)
+                Files.copy(sourcePath, destinationPath)
+            }
+        }
+
+        return SystemFile.createUnvalidated(destinationPath)
     }
 
     private fun resolveChildPath(item: StorableChild): Path {
