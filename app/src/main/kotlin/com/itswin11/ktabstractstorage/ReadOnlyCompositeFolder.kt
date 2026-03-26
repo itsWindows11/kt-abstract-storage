@@ -11,7 +11,7 @@ import kotlinx.coroutines.flow.flow
 class ReadOnlyCompositeFolder(
     override val id: String,
     override val name: String,
-    val sources: MutableCollection<File> = mutableListOf(),
+    val sources: Collection<File> = mutableListOf(),
 ) : Folder {
     override fun getItemsAsync(type: StorableType): Flow<StorableChild> = flow {
         require(type != StorableType.NONE) {
