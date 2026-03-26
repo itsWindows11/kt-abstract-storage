@@ -7,6 +7,10 @@ import java.io.OutputStream
 
 /**
  * Wraps this [UnifiedStream] in a [StreamFile].
+ *
+ * @param id Stable identifier for the resulting file.
+ * @param name Display name for the resulting file.
+ * @param shouldDispose Whether closing returned streams should close the wrapped stream.
  */
 fun UnifiedStream.asStreamFile(
     id: String = hashCode().toString(),
@@ -16,6 +20,11 @@ fun UnifiedStream.asStreamFile(
 
 /**
  * Wraps this [InputStream] in a [StreamFile].
+ *
+ * @param id Stable identifier for the resulting file.
+ * @param name Display name for the resulting file.
+ * @param shouldDispose Whether closing returned streams should close the wrapped stream.
+ * @param closeInputStreamOnClose Whether the adapter closes this input stream on close.
  */
 fun InputStream.asStreamFile(
     id: String = hashCode().toString(),
@@ -28,6 +37,11 @@ fun InputStream.asStreamFile(
 
 /**
  * Wraps this [OutputStream] in a [StreamFile].
+ *
+ * @param id Stable identifier for the resulting file.
+ * @param name Display name for the resulting file.
+ * @param shouldDispose Whether closing returned streams should close the wrapped stream.
+ * @param closeOutputStreamOnClose Whether the adapter closes this output stream on close.
  */
 fun OutputStream.asStreamFile(
     id: String = hashCode().toString(),

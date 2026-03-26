@@ -256,6 +256,9 @@ class TruncatedStream(
  * Creates a [TruncatedStream] view over this [UnifiedStream]. For seekable
  * streams the view begins at the current position. For non-seekable streams the
  * view is enforced sequentially from the next byte read or written.
+ *
+ * @param maxLength Maximum number of bytes exposed by the returned view.
+ * @param closeWrappedStreamOnClose Whether closing the returned stream closes this stream.
  */
 fun UnifiedStream.truncated(
     maxLength: Long,
