@@ -2,7 +2,7 @@ package com.itswin11.ktabstractstorage.ziparchive
 
 import com.itswin11.ktabstractstorage.ChildFile
 import com.itswin11.ktabstractstorage.ChildFolder
-import com.itswin11.ktabstractstorage.File as StorageFile
+import com.itswin11.ktabstractstorage.File
 import com.itswin11.ktabstractstorage.FolderWatcher
 import com.itswin11.ktabstractstorage.ModifiableFolder
 import com.itswin11.ktabstractstorage.StorableChild
@@ -19,13 +19,15 @@ class ZipArchiveFolder internal constructor(
     parent: ZipArchiveFolder?,
 ) : ReadOnlyZipArchiveFolder(sharedState, rootId, rootName, entryPath, parent), ModifiableFolder {
     constructor(
-        archiveFile: StorageFile,
+        archiveFile: File,
         id: String = "zip:${archiveFile.id}",
         name: String = archiveFile.name,
+        persistCoalescingWindowMs: Long = 0,
     ) : this(
         sharedState = ZipArchiveSharedState(
             ZipArchiveStore(
                 StorageFileZipArchiveIo(archiveFile, idHint = id, isReadOnly = false),
+                persistCoalescingWindowMs = persistCoalescingWindowMs,
             ),
         ),
         rootId = id,
@@ -38,10 +40,12 @@ class ZipArchiveFolder internal constructor(
         zipStream: UnifiedStream,
         id: String = "zip:${System.identityHashCode(zipStream)}",
         name: String = "archive.zip",
+        persistCoalescingWindowMs: Long = 0,
     ) : this(
         sharedState = ZipArchiveSharedState(
             ZipArchiveStore(
                 StreamZipArchiveIo(zipStream, idHint = id, isReadOnly = false),
+                persistCoalescingWindowMs = persistCoalescingWindowMs,
             ),
         ),
         rootId = id,

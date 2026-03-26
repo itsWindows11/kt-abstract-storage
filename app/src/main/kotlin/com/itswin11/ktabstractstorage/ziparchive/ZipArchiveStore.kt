@@ -3,8 +3,12 @@ package com.itswin11.ktabstractstorage.ziparchive
 import com.itswin11.ktabstractstorage.streams.asInputStream
 import com.itswin11.ktabstractstorage.streams.asOutputStream
 import com.itswin11.ktabstractstorage.streams.asUnifiedStream
+import com.itswin11.ktabstractstorage.streams.UnifiedStream
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import java.io.FileNotFoundException
 import java.io.InputStream
 import java.io.ByteArrayInputStream
@@ -23,12 +27,18 @@ internal data class ZipChildDescriptor(
 
 internal class ZipArchiveStore(
     private val io: ZipArchiveIo,
+    private val persistCoalescingWindowMs: Long = 0,
 ) {
     private val mutex = Mutex()
+    private val persistMutex = Mutex()
     private var loaded = false
     private val directories = LinkedHashSet<String>()
     private val files = LinkedHashSet<String>()
     private val updatedFiles = LinkedHashMap<String, ByteArray>()
+
+    init {
+        require(persistCoalescingWindowMs >= 0) { "persistCoalescingWindowMs must be non-negative." }
+    }
 
     suspend fun listChildren(parentPath: String): List<ZipChildDescriptor> = mutex.withLock {
         ensureLoadedLocked()
@@ -59,7 +69,8 @@ internal class ZipArchiveStore(
         directories.contains(path)
     }
 
-    suspend fun openEntryReadStream(path: String) = mutex.withLock {
+    suspend fun openEntryReadStream(path: String): UnifiedStream {
+        val inMemory = mutex.withLock {
         ensureLoadedLocked()
 
         if (!files.contains(path)) {
@@ -70,91 +81,120 @@ internal class ZipArchiveStore(
             return@withLock ByteArrayInputStream(bytes).asUnifiedStream(closeInputStreamOnClose = true)
         }
 
+        null
+    }
+
+        if (inMemory != null) {
+            return inMemory
+        }
+
         val source = io.openRead()
-        val zipIn = ZipInputStream(source.asInputStream(closeUnifiedStreamOnClose = true))
+        return ioBound {
+            val zipIn = ZipInputStream(source.asInputStream(closeUnifiedStreamOnClose = true))
 
-        try {
-            while (true) {
-                val entry = zipIn.nextEntry ?: break
-                val normalized = normalize(entry.name)
-                if (entry.isDirectory || normalized != path) {
-                    continue
+            try {
+                while (true) {
+                    val entry = zipIn.nextEntry ?: break
+                    val normalized = normalize(entry.name)
+                    if (entry.isDirectory || normalized != path) {
+                        continue
+                    }
+
+                    return@ioBound zipIn.asUnifiedStream(closeInputStreamOnClose = true)
                 }
-
-                return@withLock zipIn.asUnifiedStream(closeInputStreamOnClose = true)
+            } catch (ex: Exception) {
+                zipIn.close()
+                throw ex
             }
-        } catch (ex: Exception) {
+
             zipIn.close()
-            throw ex
-        }
-
-        zipIn.close()
-        throw FileNotFoundException("No storage item with path '$path' could be found.")
-    }
-
-    suspend fun createFolder(path: String, overwrite: Boolean) = mutex.withLock {
-        ensureLoadedLocked()
-        requireWritable()
-
-        when {
-            directories.contains(path) -> return@withLock
-            files.contains(path) && !overwrite -> throw java.nio.file.FileAlreadyExistsException(path)
-            files.contains(path) && overwrite -> {
-                files.remove(path)
-                updatedFiles.remove(path)
-            }
-        }
-
-        directories.add(path)
-        addParentDirectoriesLocked(path)
-        persistLocked()
-    }
-
-    suspend fun createFile(path: String, overwrite: Boolean) = mutex.withLock {
-        ensureLoadedLocked()
-        requireWritable()
-
-        when {
-            files.contains(path) && !overwrite -> return@withLock
-            files.contains(path) && overwrite -> {
-                updatedFiles[path] = ByteArray(0)
-                persistLocked()
-                return@withLock
-            }
-            directories.contains(path) && !overwrite -> throw java.nio.file.FileAlreadyExistsException(path)
-            directories.contains(path) && overwrite -> deletePathLocked(path)
-        }
-
-        files.add(path)
-        updatedFiles[path] = ByteArray(0)
-        addParentDirectoriesLocked(path)
-        persistLocked()
-    }
-
-    suspend fun upsertFile(path: String, content: ByteArray) = mutex.withLock {
-        ensureLoadedLocked()
-        requireWritable()
-
-        if (directories.contains(path)) {
-            deletePathLocked(path)
-        }
-
-        files.add(path)
-        updatedFiles[path] = content.copyOf()
-        addParentDirectoriesLocked(path)
-        persistLocked()
-    }
-
-    suspend fun deletePath(path: String) = mutex.withLock {
-        ensureLoadedLocked()
-        requireWritable()
-
-        if (!files.contains(path) && !directories.contains(path)) {
             throw FileNotFoundException("No storage item with path '$path' could be found.")
         }
+    }
 
-        deletePathLocked(path)
-        persistLocked()
+    suspend fun createFolder(path: String, overwrite: Boolean) {
+        val changed = mutex.withLock {
+            ensureLoadedLocked()
+            requireWritable()
+
+            when {
+                directories.contains(path) -> return@withLock false
+                files.contains(path) && !overwrite -> throw java.nio.file.FileAlreadyExistsException(path)
+                files.contains(path) && overwrite -> {
+                    files.remove(path)
+                    updatedFiles.remove(path)
+                }
+            }
+
+            directories.add(path)
+            addParentDirectoriesLocked(path)
+            true
+        }
+
+        if (changed) {
+            persistUntilCaughtUp()
+        }
+    }
+
+    suspend fun createFile(path: String, overwrite: Boolean) {
+        val changed = mutex.withLock {
+            ensureLoadedLocked()
+            requireWritable()
+
+            when {
+                files.contains(path) && !overwrite -> return@withLock false
+                files.contains(path) && overwrite -> {
+                    updatedFiles[path] = ByteArray(0)
+                    return@withLock true
+                }
+                directories.contains(path) && !overwrite -> throw java.nio.file.FileAlreadyExistsException(path)
+                directories.contains(path) && overwrite -> deletePathLocked(path)
+            }
+
+            files.add(path)
+            updatedFiles[path] = ByteArray(0)
+            addParentDirectoriesLocked(path)
+            true
+        }
+
+        if (changed) {
+            persistUntilCaughtUp()
+        }
+    }
+
+    suspend fun upsertFile(path: String, content: ByteArray) {
+        mutex.withLock {
+            ensureLoadedLocked()
+            requireWritable()
+
+            if (directories.contains(path)) {
+                deletePathLocked(path)
+            }
+
+            files.add(path)
+            updatedFiles[path] = content.copyOf()
+            addParentDirectoriesLocked(path)
+        }
+
+        persistUntilCaughtUp()
+    }
+
+    suspend fun deletePath(path: String) {
+        val changed = mutex.withLock {
+            ensureLoadedLocked()
+            requireWritable()
+
+            if (!files.contains(path) && !directories.contains(path)) {
+                throw FileNotFoundException("No storage item with path '$path' could be found.")
+            }
+
+            deletePathLocked(path)
+            true
+        }
+
+        if (changed) {
+            persistUntilCaughtUp()
+        }
     }
 
     private fun requireWritable() {
@@ -183,63 +223,109 @@ internal class ZipArchiveStore(
         if (loaded) return
         loaded = true
 
-        try {
-            io.openRead().use { stream ->
-                ZipInputStream(stream.asInputStream(closeUnifiedStreamOnClose = false)).use { zipIn ->
-                    while (true) {
-                        val entry = zipIn.nextEntry ?: break
-                        val normalized = normalize(entry.name)
-                        if (normalized.isEmpty()) continue
-
-                        if (entry.isDirectory) {
-                            directories.add(normalized)
-                            addParentDirectoriesLocked(normalized)
-                        } else {
-                            files.add(normalized)
-                            addParentDirectoriesLocked(normalized)
-                        }
-                    }
-                }
-            }
-        } catch (_: ZipException) {
-            // Not a valid ZIP yet; treat as empty archive.
-        }
-    }
-
-    private suspend fun persistLocked() {
         val source = io.openRead()
-        val sourceInput = source.asInputStream(closeUnifiedStreamOnClose = true)
 
-        io.openWrite().use { out ->
-            ZipOutputStream(out.asOutputStream(closeUnifiedStreamOnClose = false)).use { zipOut ->
-                directories.sorted().forEach { dirPath ->
-                    zipOut.putNextEntry(ZipEntry("$dirPath/"))
-                    zipOut.closeEntry()
-                }
+        ioBound {
+            try {
+                source.use { stream ->
+                    ZipInputStream(stream.asInputStream(closeUnifiedStreamOnClose = false)).use { zipIn ->
+                        while (true) {
+                            val entry = zipIn.nextEntry ?: break
+                            val normalized = normalize(entry.name)
+                            if (normalized.isEmpty()) continue
 
-                copyUnchangedEntries(sourceInput, zipOut)
-
-                updatedFiles.entries
-                    .sortedBy { it.key }
-                    .forEach { (path, data) ->
-                        if (!files.contains(path)) {
-                            return@forEach
+                            if (entry.isDirectory) {
+                                directories.add(normalized)
+                                addParentDirectoriesLocked(normalized)
+                            } else {
+                                files.add(normalized)
+                                addParentDirectoriesLocked(normalized)
+                            }
                         }
-
-                        zipOut.putNextEntry(ZipEntry(path))
-                        zipOut.write(data)
-                        zipOut.closeEntry()
                     }
+                }
+            } catch (_: ZipException) {
+                // Not a valid ZIP yet; treat as empty archive.
             }
-
-            out.flushAsync()
         }
     }
 
-    private fun copyUnchangedEntries(sourceInput: InputStream, zipOut: ZipOutputStream) {
+    private suspend fun persistUntilCaughtUp() {
+        persistMutex.withLock {
+            while (true) {
+                // Give nearby mutations a short window to join this persist cycle.
+                if (persistCoalescingWindowMs > 0) {
+                    delay(persistCoalescingWindowMs)
+                }
+
+                val snapshot = mutex.withLock {
+                    ensureLoadedLocked()
+                    PersistSnapshot(
+                        directories = directories.toList(),
+                        files = files.toSet(),
+                        updatedFiles = updatedFiles.toMap(),
+                    )
+                }
+
+                val source = io.openRead()
+                val destination = io.openWrite()
+
+                ioBound {
+                    source.asInputStream(closeUnifiedStreamOnClose = true).use { sourceInput ->
+                        destination.use { out ->
+                            ZipOutputStream(out.asOutputStream(closeUnifiedStreamOnClose = false)).use { zipOut ->
+                                snapshot.directories.sorted().forEach { dirPath ->
+                                    zipOut.putNextEntry(ZipEntry("$dirPath/"))
+                                    zipOut.closeEntry()
+                                }
+
+                                copyUnchangedEntries(sourceInput, zipOut, snapshot.files, snapshot.updatedFiles)
+
+                                snapshot.updatedFiles.entries
+                                    .sortedBy { it.key }
+                                    .forEach { (path, data) ->
+                                        if (!snapshot.files.contains(path)) {
+                                            return@forEach
+                                        }
+
+                                        zipOut.putNextEntry(ZipEntry(path))
+                                        zipOut.write(data)
+                                        zipOut.closeEntry()
+                                    }
+                            }
+
+                            out.flush()
+                        }
+                    }
+                }
+
+                val caughtUp = mutex.withLock {
+                    // Clear only entries still equal to what was just persisted.
+                    snapshot.updatedFiles.forEach { (path, data) ->
+                        val current = updatedFiles[path] ?: return@forEach
+                        if (current.contentEquals(data)) {
+                            updatedFiles.remove(path)
+                        }
+                    }
+                    updatedFiles.isEmpty()
+                }
+
+                if (caughtUp) {
+                    return
+                }
+            }
+        }
+    }
+
+    private fun copyUnchangedEntries(
+        sourceInput: InputStream,
+        zipOut: ZipOutputStream,
+        filesSnapshot: Set<String>,
+        updatedFilesSnapshot: Map<String, ByteArray>,
+    ) {
         try {
             ZipInputStream(sourceInput).use { zipIn ->
-                val copyBuffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                val copyBuffer = ByteArray(64 * 1024)
                 while (true) {
                     val entry = zipIn.nextEntry ?: break
                     val normalized = normalize(entry.name)
@@ -247,7 +333,7 @@ internal class ZipArchiveStore(
                         continue
                     }
 
-                    if (!files.contains(normalized) || updatedFiles.containsKey(normalized)) {
+                    if (!filesSnapshot.contains(normalized) || updatedFilesSnapshot.containsKey(normalized)) {
                         continue
                     }
 
@@ -282,5 +368,13 @@ internal class ZipArchiveStore(
         path.replace('\\', '/').trim('/').split('/')
             .filter { it.isNotBlank() && it != "." && it != ".." }
             .joinToString("/")
+
+    private suspend fun <T> ioBound(block: () -> T): T = withContext(Dispatchers.IO) { block() }
+
+    private data class PersistSnapshot(
+        val directories: List<String>,
+        val files: Set<String>,
+        val updatedFiles: Map<String, ByteArray>,
+    )
 }
 

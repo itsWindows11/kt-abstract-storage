@@ -1,6 +1,6 @@
 package com.itswin11.ktabstractstorage.ziparchive
 
-import com.itswin11.ktabstractstorage.File as StorageFile
+import com.itswin11.ktabstractstorage.File
 import com.itswin11.ktabstractstorage.enums.FileAccessMode
 import com.itswin11.ktabstractstorage.streams.NonDisposableUnifiedStreamWrapper
 import com.itswin11.ktabstractstorage.streams.UnifiedStream
@@ -15,7 +15,7 @@ internal interface ZipArchiveIo {
 }
 
 internal class StorageFileZipArchiveIo(
-    private val file: StorageFile,
+    private val file: File,
     override val idHint: String? = null,
     override val isReadOnly: Boolean,
 ) : ZipArchiveIo {

@@ -2,7 +2,7 @@ package com.itswin11.ktabstractstorage.ziparchive
 
 import com.itswin11.ktabstractstorage.ChildFile
 import com.itswin11.ktabstractstorage.ChildFolder
-import com.itswin11.ktabstractstorage.File as StorageFile
+import com.itswin11.ktabstractstorage.File
 import com.itswin11.ktabstractstorage.Folder
 import com.itswin11.ktabstractstorage.StorableChild
 import com.itswin11.ktabstractstorage.enums.FileAccessMode
@@ -24,7 +24,7 @@ open class ReadOnlyZipArchiveFolder internal constructor(
     private val parentFolder: Folder?,
 ) : ChildFolder, GetItem, GetItemRecursive, GetFirstByName {
     constructor(
-        archiveFile: StorageFile,
+        archiveFile: File,
         id: String = "zip:${archiveFile.id}",
         name: String = archiveFile.name,
     ) : this(

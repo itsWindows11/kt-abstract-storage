@@ -19,7 +19,7 @@ import kotlin.math.min
 class MemoryFile internal constructor(
     override val name: String,
     private var parentFolder: MemoryFolder? = null,
-    override val id: String = UUID.randomUUID().toString(),
+    override val id: String = name.hashCode().toString(),
 ) : ChildFile {
     /**
      * Creates a new instance of [MemoryFile] with a derived id from the hash code.
@@ -47,7 +47,7 @@ class MemoryFile internal constructor(
 
     private class MemoryFileStream(
         private val file: MemoryFile,
-        private val accessMode: FileAccessMode,
+        accessMode: FileAccessMode,
     ) : UnifiedStream() {
         private var closed = false
         private var cursor = 0L
