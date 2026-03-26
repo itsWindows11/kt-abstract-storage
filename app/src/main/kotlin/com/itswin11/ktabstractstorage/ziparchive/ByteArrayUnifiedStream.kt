@@ -96,7 +96,9 @@ internal class ByteArrayUnifiedStream(
     }
 
     private fun readAll(source: UnifiedStream): ByteArray {
-        source.seek(0)
+        if (source.canSeek) {
+            source.seek(0)
+        }
         val out = ArrayList<ByteArray>()
         var total = 0
         val temp = ByteArray(DEFAULT_BUFFER_SIZE)

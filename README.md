@@ -1,23 +1,49 @@
 # kt-abstract-storage
 
-This project uses [Gradle](https://gradle.org/).
-To build and run the application, use the *Gradle* tool window by clicking the Gradle icon in the right-hand toolbar,
-or run it directly from the terminal:
+`kt-abstract-storage` is a Kotlin/JVM library that provides abstractions and implementations for:
 
-* Run `./gradlew run` to build and run the application.
-* Run `./gradlew build` to only build the application.
-* Run `./gradlew check` to run all checks, including tests.
-* Run `./gradlew clean` to clean all build outputs.
+- file and folder storage interfaces
+- in-memory and system-backed storage
+- stream adapters and wrappers
+- ZIP archive-backed virtual folders/files
 
-Note the usage of the Gradle Wrapper (`./gradlew`).
-This is the suggested way to use Gradle in production projects.
+## Modules
 
-[Learn more about the Gradle Wrapper](https://docs.gradle.org/current/userguide/gradle_wrapper.html).
+- `:app` - publishable core library (`kt-abstract-storage-core`)
+- `:utils` - utility module (`kt-abstract-storage-utils`)
+- `buildSrc` - shared Gradle convention plugin
 
-[Learn more about Gradle tasks](https://docs.gradle.org/current/userguide/command_line_interface.html#common_tasks).
+## Build and test
 
-This project follows the suggested multi-module setup and consists of the `app` and `utils` subprojects.
-The shared build logic was extracted to a convention plugin located in `buildSrc`.
+Use the Gradle wrapper from the repository root:
 
-This project uses a version catalog (see `gradle/libs.versions.toml`) to declare and version dependencies
-and both a build cache and a configuration cache (see `gradle.properties`).
+- `./gradlew build`
+- `./gradlew test`
+- `./gradlew :app:test`
+- `./gradlew clean`
+
+## Publishing
+
+The shared convention configures:
+
+- reproducible jars
+- `sourcesJar` and `javadocJar`
+- Maven publications
+- optional signing
+- optional publish targets for Maven Central (OSSRH) and GitHub Packages
+
+Coordinates and POM metadata are controlled through `gradle.properties`.
+
+### Local publish
+
+- `./gradlew publishToMavenLocal`
+
+### Publish to configured remotes
+
+- `./gradlew publish`
+
+If remote credentials/signing keys are missing, only local publication is expected to work.
+
+## Upstream parity tests
+
+The test suite includes Kotlin/JUnit ports derived from `OwlCore.Storage.Tests` (excluding HTTP-specific tests).

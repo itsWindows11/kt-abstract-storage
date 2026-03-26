@@ -2,16 +2,35 @@
 // `buildSrc` is a Gradle-recognized directory and every plugin there will be easily available in the rest of the build.
 package buildsrc.convention
 
+import org.gradle.api.publish.maven.MavenPublication
+import org.gradle.api.tasks.bundling.Jar
 import org.gradle.api.tasks.testing.logging.TestLogEvent
 
 plugins {
     // Apply the Kotlin JVM plugin to add support for Kotlin in JVM projects.
     kotlin("jvm")
+    `java-library`
+    `maven-publish`
+    signing
 }
 
 kotlin {
     // Use a specific Java version to make it easier to work in different environments.
     jvmToolchain(17)
+}
+
+java {
+    withSourcesJar()
+}
+
+val javadocJar by tasks.registering(Jar::class) {
+    archiveClassifier.set("javadoc")
+    from(layout.projectDirectory.file("README.md").asFile.takeIf { it.exists() })
+}
+
+tasks.withType<Jar>().configureEach {
+    isPreserveFileTimestamps = false
+    isReproducibleFileOrder = true
 }
 
 tasks.withType<Test>().configureEach {
@@ -27,3 +46,82 @@ tasks.withType<Test>().configureEach {
         )
     }
 }
+
+publishing {
+    publications {
+        if (findByName("mavenJava") == null) {
+            create("mavenJava", MavenPublication::class.java) {
+                from(components["java"])
+                artifact(javadocJar)
+            }
+        }
+    }
+
+    publications.withType<MavenPublication>().configureEach {
+        pom {
+            name.set(providers.gradleProperty("POM_NAME").orElse(project.name))
+            description.set(providers.gradleProperty("POM_DESCRIPTION").orElse(project.description ?: project.name))
+            url.set(providers.gradleProperty("POM_URL").orElse("https://github.com/itswin11/kt-abstract-storage"))
+
+            licenses {
+                license {
+                    name.set(providers.gradleProperty("POM_LICENSE_NAME").orElse("MIT License"))
+                    url.set(providers.gradleProperty("POM_LICENSE_URL").orElse("https://opensource.org/licenses/MIT"))
+                }
+            }
+
+            developers {
+                developer {
+                    id.set(providers.gradleProperty("POM_DEVELOPER_ID").orElse("itswin11"))
+                    name.set(providers.gradleProperty("POM_DEVELOPER_NAME").orElse("kt-abstract-storage contributors"))
+                    email.set(providers.gradleProperty("POM_DEVELOPER_EMAIL").orElse("opensource@example.com"))
+                }
+            }
+
+            scm {
+                url.set(providers.gradleProperty("POM_SCM_URL").orElse("https://github.com/itswin11/kt-abstract-storage"))
+                connection.set(providers.gradleProperty("POM_SCM_CONNECTION").orElse("scm:git:https://github.com/itswin11/kt-abstract-storage.git"))
+                developerConnection.set(providers.gradleProperty("POM_SCM_DEV_CONNECTION").orElse("scm:git:ssh://git@github.com/itswin11/kt-abstract-storage.git"))
+            }
+        }
+    }
+
+    repositories {
+        mavenLocal()
+
+        val ossrhUrl = providers.gradleProperty("OSSRH_URL").orNull
+        if (!ossrhUrl.isNullOrBlank()) {
+            maven {
+                name = "OSSRH"
+                url = uri(ossrhUrl)
+                credentials {
+                    username = providers.gradleProperty("OSSRH_USERNAME").orNull
+                    password = providers.gradleProperty("OSSRH_PASSWORD").orNull
+                }
+            }
+        }
+
+        val githubRepo = providers.gradleProperty("GITHUB_PACKAGES_REPOSITORY").orNull
+        if (!githubRepo.isNullOrBlank()) {
+            maven {
+                name = "GitHubPackages"
+                url = uri("https://maven.pkg.github.com/$githubRepo")
+                credentials {
+                    username = providers.gradleProperty("GITHUB_ACTOR").orNull ?: System.getenv("GITHUB_ACTOR")
+                    password = providers.gradleProperty("GITHUB_TOKEN").orNull ?: System.getenv("GITHUB_TOKEN")
+                }
+            }
+        }
+    }
+}
+
+signing {
+    val signingKey = providers.gradleProperty("SIGNING_KEY").orNull
+    val signingPassword = providers.gradleProperty("SIGNING_PASSWORD").orNull
+
+    if (!signingKey.isNullOrBlank() && !signingPassword.isNullOrBlank()) {
+        useInMemoryPgpKeys(signingKey, signingPassword)
+        sign(publishing.publications)
+    }
+}
+

@@ -90,7 +90,8 @@ fun Folder.createFoldersAlongRelativePathAsync(
     relativePath: String,
     overwrite: Boolean = false,
 ): Flow<Folder> = flow {
-    createAlongRelativePathCoreAsync(this@createFoldersAlongRelativePathAsync, relativePath, StorableType.FOLDER, overwrite)
+    val folderOnlyPath = normalizeFolderOnlyRelativePath(relativePath)
+    createAlongRelativePathCoreAsync(this@createFoldersAlongRelativePathAsync, folderOnlyPath, StorableType.FOLDER, overwrite)
         .collect { if (it is Folder) emit(it) }
 }
 
@@ -104,7 +105,8 @@ fun ChildFile.createFoldersAlongRelativePathAsync(
     relativePath: String,
     overwrite: Boolean = false,
 ): Flow<Folder> = flow {
-    createAlongRelativePathCoreAsync(this@createFoldersAlongRelativePathAsync, relativePath, StorableType.FOLDER, overwrite)
+    val folderOnlyPath = normalizeFolderOnlyRelativePath(relativePath)
+    createAlongRelativePathCoreAsync(this@createFoldersAlongRelativePathAsync, folderOnlyPath, StorableType.FOLDER, overwrite)
         .collect { if (it is Folder) emit(it) }
 }
 
@@ -237,5 +239,17 @@ private fun createAlongRelativePathCoreAsync(
     if (parts.isEmpty() && current is Folder) {
         emit(current)
     }
+}
+
+private fun normalizeFolderOnlyRelativePath(relativePath: String): String {
+    val normalized = relativePath.replace('\\', '/').trim()
+    val parts = normalized.split('/').map { it.trim() }.filter { it.isNotEmpty() }.toMutableList()
+    if (parts.isNotEmpty()) {
+        val last = parts.last()
+        if (last != "." && last != ".." && last.contains('.')) {
+            parts.removeAt(parts.lastIndex)
+        }
+    }
+    return parts.joinToString("/")
 }
 

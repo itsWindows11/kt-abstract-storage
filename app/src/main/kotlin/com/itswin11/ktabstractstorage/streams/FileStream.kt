@@ -26,8 +26,8 @@ class FileStream(
     mode: FileAccessMode = FileAccessMode.READ_AND_WRITE,
     forceWrites: Boolean = true
 ) : UnifiedStream() {
+    private val forceWritesEnabled = forceWrites
     private val raf = RandomAccessFile(file, getModeString(mode))
-    private val _forceWrites = forceWrites
 
     override val canRead = mode != FileAccessMode.WRITE
     override val canWrite = mode != FileAccessMode.READ
@@ -54,11 +54,11 @@ class FileStream(
     private fun getModeString(accessMode: FileAccessMode) : String {
         var modeString = when (accessMode) {
             FileAccessMode.READ -> "r"
-            FileAccessMode.WRITE -> "w"
+            FileAccessMode.WRITE -> "rw"
             FileAccessMode.READ_AND_WRITE -> "rw"
         }
 
-        if (accessMode == FileAccessMode.READ_AND_WRITE && _forceWrites)
+        if (accessMode == FileAccessMode.READ_AND_WRITE && forceWritesEnabled)
             modeString += "s"
 
         return modeString
