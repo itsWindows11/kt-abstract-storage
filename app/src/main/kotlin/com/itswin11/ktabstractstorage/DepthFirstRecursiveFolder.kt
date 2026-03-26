@@ -1,11 +1,8 @@
 package com.itswin11.ktabstractstorage
 
 import com.itswin11.ktabstractstorage.enums.StorableType
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.toList
 
 /**
  * A [Folder] wrapper that recursively traverses all descendants using depth-first search.
@@ -34,33 +31,19 @@ class DepthFirstRecursiveFolder(
             "StorableType.NONE is invalid when enumerating folder contents."
         }
 
-        if (maxDepth == 0) {
-            return@flow
-        }
-
-        val stack = ArrayDeque<Pair<Folder, Int>>()
-        stack.addLast(rootFolder to 1)
-
-        while (stack.isNotEmpty()) {
-            currentCoroutineContext().ensureActive()
-
-            val (folder, depth) = stack.removeLast()
-            val children = folder.getItemsAsync(StorableType.ALL).toList()
-
-            for (item in children) {
+        suspend fun traverse(folder: Folder, depth: Int) {
+            folder.getItemsAsync(StorableType.ALL).collect { item ->
                 if (matchesType(item, type)) {
                     emit(item)
                 }
-            }
 
-            // Push in reverse so next popped folder is the first child folder discovered.
-            for (index in children.lastIndex downTo 0) {
-                val item = children[index]
                 if (item is ChildFolder && (maxDepth == null || depth < maxDepth)) {
-                    stack.addLast(item to (depth + 1))
+                    traverse(item, depth + 1)
                 }
             }
         }
+
+        traverse(rootFolder, 1)
     }
 
     private fun matchesType(item: StorableChild, type: StorableType): Boolean = when (type) {
@@ -70,4 +53,3 @@ class DepthFirstRecursiveFolder(
         StorableType.NONE -> false
     }
 }
-

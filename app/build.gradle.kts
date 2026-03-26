@@ -2,9 +2,6 @@ plugins {
     // Apply the shared build logic from a convention plugin.
     // The shared code is located in `buildSrc/src/main/kotlin/kotlin-jvm.gradle.kts`.
     id("buildsrc.convention.kotlin-jvm")
-
-    // Apply the Application plugin to add support for building an executable JVM application.
-    application
 }
 
 dependencies {
@@ -16,8 +13,10 @@ dependencies {
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
 }
 
-application {
-    // Define the Fully Qualified Name for the application main class
-    // (Note that Kotlin compiles `App.kt` to a class with FQN `com.example.app.AppKt`.)
-    mainClass = "com.itswin11.app.AppKt"
+publishing {
+    publications {
+        named<org.gradle.api.publish.maven.MavenPublication>("mavenJava") {
+            artifactId = "kt-abstract-storage-core"
+        }
+    }
 }

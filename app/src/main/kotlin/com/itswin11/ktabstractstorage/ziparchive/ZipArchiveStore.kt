@@ -268,34 +268,46 @@ internal class ZipArchiveStore(
                 }
 
                 val source = io.openRead()
+
+                val unchangedEntries = ioBound {
+                    source.asInputStream(closeUnifiedStreamOnClose = true).use { sourceInput ->
+                        readUnchangedEntries(sourceInput, snapshot.files, snapshot.updatedFiles)
+                    }
+                }
+
                 val destination = io.openWrite()
 
                 ioBound {
-                    source.asInputStream(closeUnifiedStreamOnClose = true).use { sourceInput ->
-                        destination.use { out ->
-                            ZipOutputStream(out.asOutputStream(closeUnifiedStreamOnClose = false)).use { zipOut ->
-                                snapshot.directories.sorted().forEach { dirPath ->
-                                    zipOut.putNextEntry(ZipEntry("$dirPath/"))
+                    destination.use { out ->
+                        ZipOutputStream(out.asOutputStream(closeUnifiedStreamOnClose = false)).use { zipOut ->
+                            snapshot.directories.sorted().forEach { dirPath ->
+                                zipOut.putNextEntry(ZipEntry("$dirPath/"))
+                                zipOut.closeEntry()
+                            }
+
+                            unchangedEntries
+                                .entries
+                                .sortedBy { it.key }
+                                .forEach { (path, data) ->
+                                    zipOut.putNextEntry(ZipEntry(path))
+                                    zipOut.write(data)
                                     zipOut.closeEntry()
                                 }
 
-                                copyUnchangedEntries(sourceInput, zipOut, snapshot.files, snapshot.updatedFiles)
-
-                                snapshot.updatedFiles.entries
-                                    .sortedBy { it.key }
-                                    .forEach { (path, data) ->
-                                        if (!snapshot.files.contains(path)) {
-                                            return@forEach
-                                        }
-
-                                        zipOut.putNextEntry(ZipEntry(path))
-                                        zipOut.write(data)
-                                        zipOut.closeEntry()
+                            snapshot.updatedFiles.entries
+                                .sortedBy { it.key }
+                                .forEach { (path, data) ->
+                                    if (!snapshot.files.contains(path)) {
+                                        return@forEach
                                     }
-                            }
 
-                            out.flush()
+                                    zipOut.putNextEntry(ZipEntry(path))
+                                    zipOut.write(data)
+                                    zipOut.closeEntry()
+                                }
                         }
+
+                        out.flush()
                     }
                 }
 
@@ -317,12 +329,12 @@ internal class ZipArchiveStore(
         }
     }
 
-    private fun copyUnchangedEntries(
+    private fun readUnchangedEntries(
         sourceInput: InputStream,
-        zipOut: ZipOutputStream,
         filesSnapshot: Set<String>,
         updatedFilesSnapshot: Map<String, ByteArray>,
-    ) {
+    ): Map<String, ByteArray> {
+        val unchanged = LinkedHashMap<String, ByteArray>()
         try {
             ZipInputStream(sourceInput).use { zipIn ->
                 val copyBuffer = ByteArray(64 * 1024)
@@ -337,20 +349,22 @@ internal class ZipArchiveStore(
                         continue
                     }
 
-                    zipOut.putNextEntry(ZipEntry(normalized))
+                    val entryOutput = java.io.ByteArrayOutputStream()
                     while (true) {
                         val read = zipIn.read(copyBuffer)
                         if (read <= 0) {
                             break
                         }
-                        zipOut.write(copyBuffer, 0, read)
+                        entryOutput.write(copyBuffer, 0, read)
                     }
-                    zipOut.closeEntry()
+                    unchanged[normalized] = entryOutput.toByteArray()
                 }
             }
         } catch (_: ZipException) {
             // Treat non-zip source as empty source.
         }
+
+        return unchanged
     }
 
     private fun addParentDirectoriesLocked(path: String) {

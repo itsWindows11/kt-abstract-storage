@@ -11,3 +11,11 @@ dependencies {
     implementation(libs.bundles.kotlinxEcosystem)
     testImplementation(kotlin("test"))
 }
+
+publishing {
+    publications {
+        named<org.gradle.api.publish.maven.MavenPublication>("mavenJava") {
+            artifactId = "kt-abstract-storage-utils"
+        }
+    }
+}
